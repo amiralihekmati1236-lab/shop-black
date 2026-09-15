@@ -7,7 +7,7 @@ const { URL } = require("url");
 
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = __dirname;
-const PUBLIC = path.join(ROOT, "public");
+const PUBLIC = ROOT;
 const DATA = path.join(ROOT, "data");
 const UPLOADS = path.join(ROOT, "uploads");
 const PRODUCTS = path.join(DATA, "products.json");
