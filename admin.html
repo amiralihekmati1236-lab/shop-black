@@ -1,0 +1,8 @@
+<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>پنل مدیریت | SHOP BLACK</title><link rel="stylesheet" href="/style.css"></head>
+<body><header class="top"><div class="wrap nav"><a class="brand" href="/">SHOP <b>BLACK</b></a><a href="/">بازگشت به فروشگاه</a></div></header>
+<main class="wrap admin">
+<section id="loginBox" class="login"><h1>ورود مدیر</h1><p>رمز پنل را وارد کنید.</p><input id="password" type="password" placeholder="رمز عبور"><button class="goldBtn wide" onclick="login()">ورود</button><div id="loginMsg"></div></section>
+<section id="panel" hidden><div class="adminHead"><div><span class="eyebrow">CONTROL PANEL</span><h1>پنل مدیریت</h1></div><button class="danger" onclick="logout()">خروج</button></div>
+<div class="formCard"><h2 id="formTitle">افزودن محصول</h2><input id="name" placeholder="نام محصول"><input id="price" type="number" min="0" placeholder="قیمت (تومان)"><textarea id="description" placeholder="توضیحات محصول"></textarea><label class="file">📷 انتخاب عکس محصول<input id="imageFile" type="file" accept="image/jpeg,image/png,image/webp,image/gif" onchange="uploadImage()"></label><div id="preview"></div><button class="goldBtn" onclick="saveProduct()">ذخیره محصول</button><button class="ghost" onclick="resetForm()">لغو و محصول جدید</button><input id="editId" type="hidden"></div>
+<h2>محصولات فعلی</h2><div id="adminProducts" class="adminList"></div>
+<h2>سفارش‌ها</h2><div id="orders" class="orders"></div></section></main><script src="/admin.js"></script></body></html>
