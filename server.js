@@ -14,20 +14,6 @@ const UPLOADS = path.join(ROOT, "uploads");
 
 const PRODUCTS = path.join(DATA, "products.json");
 const ORDERS = path.join(DATA, "orders.json");
-
-const ADMIN_PASSWORD =
-  process.env.ADMIN_PASSWORD || "1236";
-
-const sessions = new Set();
-
-const SUPABASE_URL =
-  String(process.env.SUPABASE_URL || "")
-  .replace(/\/$/, "");
-
-const SUPABASE_SECRET_KEY =
-  String(process.env.SUPABASE_SECRET_KEY || "");
-
-
 function supabaseHeaders(extra = {}) {
   return {
     apikey: SUPABASE_SECRET_KEY,
@@ -35,6 +21,19 @@ function supabaseHeaders(extra = {}) {
     "Content-Type": "application/json",
     ...extra
   };
+}
+const ADMIN_PASSWORD =
+  process.env.ADMIN_PASSWORD || "1236";
+
+const sessions = new Set(
+
+const SUPABASE_URL =
+  String(process.env.SUPABASE_URL || "")
+  .replace(/\/$/, "");
+
+
+
+
 }
 
 
