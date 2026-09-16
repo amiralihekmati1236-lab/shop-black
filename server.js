@@ -6,28 +6,25 @@ const { URL } = require("url");
 
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = __dirname;
+const PUBLIC = ROOT;
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "1236";
 
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").replace(/\/+$/, "");
-const SUPABASE_SECRET_KEY = String(
-  process.env.SUPABASE_SECRET_KEY || ""
-);
+const SUPABASE_SECRET_KEY = String(process.env.SUPABASE_SECRET_KEY || "");
+
+const UPLOADS = path.join(ROOT, "uploads");
+const ORDERS = path.join(ROOT, "orders.json");
 
 const sessions = new Set();
 
-const DATA = path.join(ROOT, "data");
-const ORDERS_FILE = path.join(DATA, "orders.json");
-
-fs.mkdirSync(DATA, { recursive: true });
-
-if (!fs.existsSync(ORDERS_FILE)) {
-  fs.writeFileSync(ORDERS_FILE, "[]", "utf8");
+if (!fs.existsSync(UPLOADS)) {
+  fs.mkdirSync(UPLOADS, { recursive: true });
 }
 
-/* =========================
-   BASIC HELPERS
-========================= */
+if (!fs.existsSync(ORDERS)) {
+  fs.writeFileSync(ORDERS, "[]", "utf8");
+}
 
 function json(res, status, data) {
   const body = JSON.stringify(data);
@@ -40,15 +37,7 @@ function json(res, status, data) {
   res.end(body);
 }
 
-function text(res, status, body, type = "text/plain; charset=utf-8") {
-  res.writeHead(status, {
-    "Content-Type": type
-  });
-
-  res.end(body);
-}
-
-function readJsonFile(file) {
+function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
   } catch {
@@ -56,25 +45,31 @@ function readJsonFile(file) {
   }
 }
 
-function writeJsonFile(file, data) {
-  fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf8");
+function writeJson(file, value) {
+  fs.writeFileSync(file, JSON.stringify(value, null, 2), "utf8");
 }
 
-function randomId() {
-  return crypto.randomBytes(24).toString("hex");
-}
+function getCookies(req) {
+  const cookies = {};
+  const raw = req.headers.cookie || "";
 
-function getSession(req) {
-  const cookie = req.headers.cookie || "";
+  raw.split(";").forEach(part => {
+    const index = part.indexOf("=");
 
-  const match = cookie.match(/session=([^;]+)/);
+    if (index === -1) return;
 
-  return match ? match[1] : null;
+    const key = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+
+    cookies[key] = decodeURIComponent(value);
+  });
+
+  return cookies;
 }
 
 function isAdmin(req) {
-  const session = getSession(req);
-  return session && sessions.has(session);
+  const cookies = getCookies(req);
+  return !!cookies.admin_session && sessions.has(cookies.admin_session);
 }
 
 function requireAdmin(req, res) {
@@ -92,161 +87,351 @@ function requireAdmin(req, res) {
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
-    let body = "";
+    const chunks = [];
 
     req.on("data", chunk => {
-      body += chunk;
-
-      if (body.length > 25 * 1024 * 1024) {
-        reject(new Error("Request too large"));
-        req.destroy();
-      }
+      chunks.push(chunk);
     });
 
     req.on("end", () => {
-      try {
-        resolve(body ? JSON.parse(body) : {});
-      } catch {
-        resolve({});
-      }
+      resolve(Buffer.concat(chunks));
     });
 
     req.on("error", reject);
   });
 }
 
-/* =========================
-   SUPABASE
-========================= */
+function readJsonBody(req) {
+  return readBody(req).then(buffer => {
+    if (!buffer.length) return {};
 
-async function supabaseRequest(table, options = {}) {
+    try {
+      return JSON.parse(buffer.toString("utf8"));
+    } catch {
+      return {};
+    }
+  });
+}
+
+function mapProduct(row) {
+  return {
+    id: String(row.id),
+    name: row.name || "",
+    price: Number(row.price || 0),
+    image: row.image || "",
+    description: row.description || "",
+    createdAt: row.created_at || null
+  };
+}
+
+async function supabaseRequest(endpoint, options = {}) {
   if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) {
-    throw new Error("Supabase is not configured");
+    throw new Error("Supabase environment variables are missing");
   }
-
-  const url = ${SUPABASE_URL}/rest/v1/${table};
 
   const headers = {
     apikey: SUPABASE_SECRET_KEY,
     Authorization: Bearer ${SUPABASE_SECRET_KEY},
-    "Content-Type": "application/json",
-    ...(options.headers || {})
+    ...options.headers
   };
 
-  const response = await fetch(url, {
-    method: options.method || "GET",
-    headers,
-    body: options.body
-      ? JSON.stringify(options.body)
-      : undefined
-  });
+  const response = await fetch(
+    ${SUPABASE_URL}${endpoint},
+    {
+      ...options,
+      headers
+    }
+  );
 
-  const raw = await response.text();
+  const text = await response.text();
 
-  let data;
+  let data = null;
 
   try {
-    data = raw ? JSON.parse(raw) : null;
+    data = text ? JSON.parse(text) : null;
   } catch {
-    data = raw;
+    data = text;
   }
 
   if (!response.ok) {
-    throw new Error(
-      Supabase error ${response.status}: ${raw}
-    );
+    const message =
+      typeof data === "string"
+        ? data
+        : data?.message ⠟⠟⠞⠺⠞⠵⠟⠞⠟⠞⠞⠺⠟ "Supabase error";
+
+    throw new Error(message);
   }
 
   return data;
 }
 
-function mapProduct(product) {
-  return {
-    id: String(product.id),
-    name: product.name || "",
-    price: Number(product.price || 0),
-    image: product.image || "",
-    description: product.description || "",
-    createdAt: product.created_at || ""
-  };
-}
-
-/* =========================
-   PRODUCTS
-========================= */
-
 async function getProducts() {
-  const data = await supabaseRequest(
-    "products?select=*&order=created_at.desc"
+  const rows = await supabaseRequest(
+    "/rest/v1/products?select=*&order=created_at.desc"
   );
 
-  return Array.isArray(data)
-    ? data.map(mapProduct)
-    : [];
+  return rows.map(mapProduct);
 }
 
 async function createProduct(product) {
-  const data = await supabaseRequest("products", {method: "POST",
-    headers: {
-      Prefer: "return=representation"
-    },
-    body: {
-      name: String(product.name || ""),
-      price: Number(product.price || 0),
-      image: String(product.image || ""),
-      description: String(product.description || "")
-    }
-  });
-
-  return data && data[0]
-    ? mapProduct(data[0])
-    : null;
-}
-
-async function updateProduct(id, product) {
-  const data = await supabaseRequest(
-    products?id=eq.${encodeURIComponent(id)},
+  const rows = await supabaseRequest(
+    "/rest/v1/products",
     {
-      method: "PATCH",
+      method: "POST",
       headers: {
+        "Content-Type": "application/json",
         Prefer: "return=representation"
       },
-      body: {
-        name: String(product.name || ""),
-        price: Number(product.price || 0),
-        image: String(product.image || ""),
-        description: String(product.description || "")
-      }
+      body: JSON.stringify({
+        name: product.name,
+        price: product.price,
+        image: product.image || "",
+        description: product.description || ""
+      })
     }
   );
 
-  return data && data[0]
-    ? mapProduct(data[0])
-    : null;
+  return mapProduct(rows[0]);
+}const http = require("http");
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+const { URL } = require("url");
+
+const PORT = Number(process.env.PORT || 3000);
+const ROOT = __dirname;
+const PUBLIC = ROOT;
+
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "1236";
+
+const SUPABASE_URL = String(process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+const SUPABASE_SECRET_KEY = String(process.env.SUPABASE_SECRET_KEY || "");
+
+const UPLOADS = path.join(ROOT, "uploads");
+const ORDERS = path.join(ROOT, "orders.json");
+
+const sessions = new Set();
+
+if (!fs.existsSync(UPLOADS)) {
+  fs.mkdirSync(UPLOADS, { recursive: true });
+}
+
+if (!fs.existsSync(ORDERS)) {
+  fs.writeFileSync(ORDERS, "[]", "utf8");
+}
+
+function json(res, status, data) {
+  const body = JSON.stringify(data);
+
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store"
+  });
+
+  res.end(body);
+}
+
+function readJson(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return [];
+  }
+}
+
+function writeJson(file, value) {
+  fs.writeFileSync(file, JSON.stringify(value, null, 2), "utf8");
+}
+
+function getCookies(req) {
+  const cookies = {};
+  const raw = req.headers.cookie || "";
+
+  raw.split(";").forEach(part => {
+    const index = part.indexOf("=");
+
+    if (index === -1) return;
+
+    const key = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+
+    cookies[key] = decodeURIComponent(value);
+  });
+
+  return cookies;
+}
+
+function isAdmin(req) {
+  const cookies = getCookies(req);
+  return !!cookies.admin_session && sessions.has(cookies.admin_session);
+}
+
+function requireAdmin(req, res) {
+  if (!isAdmin(req)) {
+    json(res, 401, {
+      ok: false,
+      error: "Unauthorized"
+    });
+
+    return false;
+  }
+
+  return true;
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+
+    req.on("data", chunk => {
+      chunks.push(chunk);
+    });
+
+    req.on("end", () => {
+      resolve(Buffer.concat(chunks));
+    });
+
+    req.on("error", reject);
+  });
+}
+
+function readJsonBody(req) {
+  return readBody(req).then(buffer => {
+    if (!buffer.length) return {};
+
+    try {
+      return JSON.parse(buffer.toString("utf8"));
+    } catch {
+      return {};
+    }
+  });
+}
+
+function mapProduct(row) {
+  return {
+    id: String(row.id),
+    name: row.name || "",
+    price: Number(row.price || 0),
+    image: row.image || "",
+    description: row.description || "",
+    createdAt: row.created_at || null
+  };
+}
+
+async function supabaseRequest(endpoint, options = {}) {
+  if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) {
+    throw new Error("Supabase environment variables are missing");
+  }
+
+  const headers = {
+    apikey: SUPABASE_SECRET_KEY,
+    Authorization: Bearer ${SUPABASE_SECRET_KEY},
+    ...options.headers
+  };
+
+  const response = await fetch(
+    ${SUPABASE_URL}${endpoint},
+    {
+      ...options,
+      headers
+    }
+  );
+
+  const text = await response.text();
+
+  let data = null;
+
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
+
+  if (!response.ok) {
+    const message =
+      typeof data === "string"
+        ? data
+        : data?.message ⠟⠺⠵⠺⠞⠟⠞⠟⠺⠵⠟⠺⠟ "Supabase error";
+
+    throw new Error(message);
+  }
+
+  return data;
+}
+
+async function getProducts() {
+  const rows = await supabaseRequest(
+    "/rest/v1/products?select=*&order=created_at.desc"
+  );
+
+  return rows.map(mapProduct);
+}
+
+async function createProduct(product) {
+  const rows = await supabaseRequest(
+    "/rest/v1/products",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Prefer: "return=representation"
+      },
+      body: JSON.stringify({
+        name: product.name,
+        price: product.price,
+        image: product.image || "",
+        description: product.description || ""
+      })
+    }
+  );
+
+  return mapProduct(rows[0]);
+}async function updateProduct(id, product) {
+  const rows = await supabaseRequest(
+    /rest/v1/products?id=eq.${encodeURIComponent(id)},
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Prefer: "return=representation"
+      },
+      body: JSON.stringify({
+        name: product.name,
+        price: product.price,
+        image: product.image || "",
+        description: product.description || ""
+      })
+    }
+  );
+
+  if (!rows.length) {
+    throw new Error("Product not found");
+  }
+
+  return mapProduct(rows[0]);
 }
 
 async function deleteProduct(id) {
   await supabaseRequest(
-    products?id=eq.${encodeURIComponent(id)},
+    /rest/v1/products?id=eq.${encodeURIComponent(id)},
     {
       method: "DELETE"
     }
   );
 }
 
-/* =========================
-   STORAGE
-========================= */
-
-async function createStorageBucket() {
+async function ensureStorageBucket() {
   try {
-    const response = await fetch(
-      ${SUPABASE_URL}/storage/v1/bucket,
+    await supabaseRequest("/storage/v1/bucket/product-images");
+    return;
+  } catch {}
+
+  try {
+    await supabaseRequest(
+      "/storage/v1/bucket",
       {
         method: "POST",
         headers: {
-          apikey: SUPABASE_SECRET_KEY,
-          Authorization: Bearer ${SUPABASE_SECRET_KEY},
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
@@ -256,159 +441,170 @@ async function createStorageBucket() {
         })
       }
     );
-
-    if (
-      response.ok ||
-      response.status === 409
-    ) {
-      return true;
-    }
-
-    return false;
-  } catch {
-    return false;
-  }
+  } catch {}
 }
 
-async function uploadImage(base64, originalName) {
-  if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) {
-    throw new Error("Supabase is not configured");
-  }
-
-  await createStorageBucket();
-
-  const match = String(base64).match(
-    /^data:([^;]+);base64,(.+)$/
-  );
+function parseMultipart(buffer, contentType) {
+  const match = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
 
   if (!match) {
-    throw new Error("Invalid image");
+    throw new Error("Multipart boundary not found");
   }
 
-  const contentType = match[1];
-  const buffer = Buffer.from(match[2], "base64");
+  const boundary = "--" + (match[1] || match[2]);
+  const body = buffer.toString("latin1");
+  const parts = body.split(boundary);
+
+  const result = [];
+
+  for (const part of parts) {
+    if (
+      !part ||
+      part === "--\r\n" ||
+      part === "--"
+    ) {
+      continue;
+    }
+
+    const separator = part.indexOf("\r\n\r\n");
+
+    if (separator === -1) continue;
+
+    const headerText = part.slice(0, separator);
+    let content = part.slice(separator + 4);
+
+    if (content.endsWith("\r\n")) {
+      content = content.slice(0, -2);
+    }
+
+    const nameMatch =
+      headerText.match(/name="([^"]+)"/i);
+
+    const fileMatch =
+      headerText.match(/filename="([^"]*)"/i);
+
+    const typeMatch =
+      headerText.match(/Content-Type:\s*([^\r\n]+)/i);
+
+    if (!nameMatch) continue;
+
+    result.push({
+      name: nameMatch[1],
+      filename: fileMatch ? fileMatch[1] : null,
+      contentType: typeMatch
+        ? typeMatch[1].trim()
+        : "application/octet-stream",
+      data: Buffer.from(content, "latin1")
+    });
+  }
+
+  return result;
+}
+
+async function uploadToSupabase(file) {
+  await ensureStorageBucket();
 
   const ext =
-    contentType === "image/png"
-      ? "png"
-      : contentType === "image/webp"
-      ? "webp"
-      : "jpg";
+    path.extname(file.filename ⠞⠺⠵⠵⠵⠺⠟⠞⠞⠺⠞⠟⠺⠺⠺⠵⠵⠵⠺ ".jpg";
 
   const filename =
-    ${Date.now()}-${crypto.randomBytes(8).toString("hex")}.${ext};
+    ${Date.now()}-${crypto.randomBytes(6).toString("hex")}${ext};
 
-  const uploadUrl =
-    ${SUPABASE_URL}/storage/v1/object/product-images/${filename};
-
-  const response = await fetch(uploadUrl, {
-    method: "POST",
-    headers: {
-      apikey: SUPABASE_SECRET_KEY,
-      Authorization: Bearer ${SUPABASE_SECRET_KEY},
-      "Content-Type": contentType,
-      "x-upsert": "true"
-    },
-    body: buffer
-  });
-
-  const raw = await response.text();
-
-  if (!response.ok) {
-    throw new Error(
-      Image upload failed: ${response.status} ${raw}
-    );
-  }
+  await supabaseRequest(
+    /storage/v1/object/product-images/${encodeURIComponent(filename)},
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": file.contentType || "application/octet-stream",
+        "x-upsert": "true"
+      },
+      body: file.data
+    }
+  );
 
   return ${SUPABASE_URL}/storage/v1/object/public/product-images/${filename};
 }
 
-/* =========================
-   STATIC FILES
-========================= */
+function safeStaticPath(urlPath) {
+  let decoded;
 
-const MIME = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "application/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".webp": "image/webp",
-  ".svg": "image/svg+xml",
-  ".ico": "image/x-icon"
-};
-
-function serveFile(req, res, pathname) {
-  let filePath = path.join(ROOT, pathname);
-
-  if (pathname === "/") {
-    filePath = path.join(ROOT, "index.html");
+  try {
+    decoded = decodeURIComponent(urlPath);
+  } catch {
+    return null;
   }
 
-  if (!filePath.startsWith(ROOT)) {
-    return text(res, 403, "Forbidden");
+  decoded = decoded.split("?")[0];
+
+  if (decoded === "/") {
+    decoded = "/index.html";
   }
 
-  if (!fs.existsSync(filePath)) {
-    return text(res, 404, "Not Found");
+  const normalized = path.normalize(decoded).replace(/^(\.\.[/\\])+/, "");
+
+  const fullPath = path.join(PUBLIC, normalized);
+
+  if (!fullPath.startsWith(PUBLIC)) {
+    return null;
   }
 
-  const stat = fs.statSync(filePath);
-
-  if (!stat.isFile()) {
-    return text(res, 404, "Not Found");
-  }
-
-  const ext = path.extname(filePath).toLowerCase();
-
-  res.writeHead(200, {
-    "Content-Type":
-      MIME[ext] || "application/octet-stream"
-  });
-
-  fs.createReadStream(filePath).pipe(res);
+  return fullPath;
 }
 
-/* =========================
-   SERVER
-========================= */const server = http.createServer(async (req, res) => {
+function contentType(file) {
+  const ext = path.extname(file).toLowerCase();
+
+  const types = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".txt": "text/plain; charset=utf-8"
+  };
+
+  return types[ext] || "application/octet-stream";
+}async function handle(req, res) {
+  const url = new URL(
+    req.url,
+    http://${req.headers.host || "localhost"}
+  );
+
+  const p = url.pathname;
+
   try {
-    const requestUrl = new URL(
-      req.url,
-      http://${req.headers.host || "localhost"}
-    );
+    // PRODUCTS
+    if (p === "/api/products" && req.method === "GET") {
+      const products = await getProducts();
+      return json(res, 200, products);
+    }
 
-    const pathname = requestUrl.pathname;
+    // ADMIN LOGIN
+    if (p === "/api/admin/login" && req.method === "POST") {
+      const body = await readJsonBody(req);
 
-    /* ---------- LOGIN ---------- */
-
-    if (
-      pathname === "/api/admin/login" &&
-      req.method === "POST"
-    ) {
-      const body = await readBody(req);
-
-      if (
-        String(body.password || "") !==
-        String(ADMIN_PASSWORD)
-      ) {
+      if (String(body.password || "") !== ADMIN_PASSWORD) {
         return json(res, 401, {
           ok: false,
           error: "رمز عبور اشتباه است"
         });
       }
 
-      const session = randomId();
+      const token =
+        crypto.randomBytes(32).toString("hex");
 
-      sessions.add(session);
+      sessions.add(token);
 
       res.writeHead(200, {
-        "Content-Type":
-          "application/json; charset=utf-8",
+        "Content-Type": "application/json; charset=utf-8",
         "Set-Cookie":
-          session=${session}; HttpOnly; Path=/; SameSite=Lax
+          admin_session=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Lax
       });
 
       return res.end(
@@ -418,23 +614,18 @@ function serveFile(req, res, pathname) {
       );
     }
 
-    /* ---------- LOGOUT ---------- */
+    // ADMIN LOGOUT
+    if (p === "/api/admin/logout" && req.method === "POST") {
+      const cookies = getCookies(req);
 
-    if (
-      pathname === "/api/admin/logout" &&
-      req.method === "POST"
-    ) {
-      const session = getSession(req);
-
-      if (session) {
-        sessions.delete(session);
+      if (cookies.admin_session) {
+        sessions.delete(cookies.admin_session);
       }
 
       res.writeHead(200, {
-        "Content-Type":
-          "application/json; charset=utf-8",
+        "Content-Type": "application/json; charset=utf-8",
         "Set-Cookie":
-          "session=; Max-Age=0; HttpOnly; Path=/; SameSite=Lax"
+          "admin_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax"
       });
 
       return res.end(
@@ -444,35 +635,15 @@ function serveFile(req, res, pathname) {
       );
     }
 
-    /* ---------- CHECK ADMIN ---------- */
-
-    if (
-      pathname === "/api/admin/me" &&
-      req.method === "GET"
-    ) {
+    // ADMIN CHECK
+    if (p === "/api/admin/check" && req.method === "GET") {
       return json(res, 200, {
-        ok: true,
-        admin: isAdmin(req)
+        ok: isAdmin(req)
       });
     }
 
-    /* ---------- PUBLIC PRODUCTS ---------- */
-
-    if (
-      pathname === "/api/products" &&
-      req.method === "GET"
-    ) {
-      const products = await getProducts();
-
-      return json(res, 200, products);
-    }
-
-    /* ---------- ADMIN PRODUCTS ---------- */
-
-    if (
-      pathname === "/api/admin/products" &&
-      req.method === "GET"
-    ) {
+    // ADMIN GET PRODUCTS
+    if (p === "/api/admin/products" && req.method === "GET") {
       if (!requireAdmin(req, res)) return;
 
       const products = await getProducts();
@@ -480,17 +651,21 @@ function serveFile(req, res, pathname) {
       return json(res, 200, products);
     }
 
-    /* ---------- ADD PRODUCT ---------- */
-
-    if (
-      pathname === "/api/admin/products" &&
-      req.method === "POST"
-    ) {
+    // ADMIN ADD PRODUCT
+    if (p === "/api/admin/products" && req.method === "POST") {
       if (!requireAdmin(req, res)) return;
 
-      const body = await readBody(req);
+      const body = await readJsonBody(req);
 
-      if (!body.name) {
+      const name = String(body.name || "").trim();
+      const description = String(
+        body.description || ""
+      ).trim();
+
+      const price = Number(body.price || 0);
+      const image = String(body.image || "").trim();
+
+      if (!name) {
         return json(res, 400, {
           ok: false,
           error: "نام محصول وارد نشده"
@@ -498,10 +673,10 @@ function serveFile(req, res, pathname) {
       }
 
       const product = await createProduct({
-        name: body.name,
-        price: body.price,
-        image: body.image,
-        description: body.description
+        name,
+        price: Math.round(price),
+        image,
+        description
       });
 
       return json(res, 201, {
@@ -510,23 +685,21 @@ function serveFile(req, res, pathname) {
       });
     }
 
-    /* ---------- EDIT PRODUCT ---------- */
-
+    // ADMIN UPDATE PRODUCT
     if (
-      pathname.startsWith("/api/admin/products/") &&
+      p.startsWith("/api/admin/products/") &&
       req.method === "PUT"
     ) {
       if (!requireAdmin(req, res)) return;
 
-      const id = pathname.split("/").pop();
-
-      const body = await readBody(req);
+      const id = p.split("/").pop();
+      const body = await readJsonBody(req);
 
       const product = await updateProduct(id, {
-        name: body.name,
-        price: body.price,
-        image: body.image,
-        description: body.description
+        name: String(body.name || "").trim(),
+        price: Math.round(Number(body.price || 0)),
+        image: String(body.image || "").trim(),
+        description: String(body.description || "").trim()
       });
 
       return json(res, 200, {
@@ -535,15 +708,14 @@ function serveFile(req, res, pathname) {
       });
     }
 
-    /* ---------- DELETE PRODUCT ---------- */
-
+    // ADMIN DELETE PRODUCT
     if (
-      pathname.startsWith("/api/admin/products/") &&
+      p.startsWith("/api/admin/products/") &&
       req.method === "DELETE"
     ) {
       if (!requireAdmin(req, res)) return;
 
-      const id = pathname.split("/").pop();
+      const id = p.split("/").pop();
 
       await deleteProduct(id);
 
@@ -552,45 +724,59 @@ function serveFile(req, res, pathname) {
       });
     }
 
-    /* ---------- UPLOAD IMAGE ---------- */
-
+    // ADMIN UPLOAD IMAGE
     if (
-      pathname === "/api/admin/upload" &&
+      p === "/api/admin/upload" &&
       req.method === "POST"
     ) {
       if (!requireAdmin(req, res)) return;
 
+      const contentTypeHeader =
+        req.headers["content-type"] || "";
+
       const body = await readBody(req);
 
-      if (!body.image) {
+      if (
+        !contentTypeHeader
+          .toLowerCase()
+          .startsWith("multipart/form-data")
+      ) {
         return json(res, 400, {
           ok: false,
-          error: "تصویر ارسال نشده"
+          error: "فایل ارسال نشده"
+        });
+      }const parts =
+        parseMultipart(body, contentTypeHeader);
+
+      const file = parts.find(x => x.filename);
+
+      if (!file) {
+        return json(res, 400, {
+          ok: false,
+          error: "فایل پیدا نشد"
         });
       }
 
-      const imageUrl = await uploadImage(
-        body.image,
-        body.name || "product"
-      );return json(res, 200, {
+      const imageUrl =
+        await uploadToSupabase(file);
+
+      return json(res, 200, {
         ok: true,
         url: imageUrl,
         image: imageUrl
       });
     }
 
-    /* ---------- ORDERS ---------- */
+    // CREATE ORDER
+    if (p === "/api/orders" && req.method === "POST") {
+      const body = await readJsonBody(req);
 
-    if (
-      pathname === "/api/orders" &&
-      req.method === "POST"
-    ) {
-      const body = await readBody(req);
-
-      const orders = readJsonFile(ORDERS_FILE);
+      const orders = readJson(ORDERS);
 
       const order = {
-        id: randomId(),
+        id:
+          Date.now().toString() +
+          crypto.randomBytes(3).toString("hex"),
         createdAt: new Date().toISOString(),
         name: body.name || "",
         phone: body.phone || "",
@@ -604,7 +790,7 @@ function serveFile(req, res, pathname) {
 
       orders.unshift(order);
 
-      writeJsonFile(ORDERS_FILE, orders);
+      writeJson(ORDERS, orders);
 
       return json(res, 201, {
         ok: true,
@@ -612,40 +798,85 @@ function serveFile(req, res, pathname) {
       });
     }
 
-    /* ---------- ADMIN ORDERS ---------- */
-
+    // ADMIN GET ORDERS
     if (
-      pathname === "/api/admin/orders" &&
+      p === "/api/admin/orders" &&
       req.method === "GET"
     ) {
       if (!requireAdmin(req, res)) return;
 
-      return json(
-        res,
-        200,
-        readJsonFile(ORDERS_FILE)
-      );
+      return json(res, 200, readJson(ORDERS));
     }
 
-    /* ---------- HEALTH ---------- */
-
+    // ADMIN UPDATE ORDER
     if (
-      pathname === "/api/health" &&
-      req.method === "GET"
+      p.startsWith("/api/admin/orders/") &&
+      req.method === "PUT"
     ) {
+      if (!requireAdmin(req, res)) return;
+
+      const id = p.split("/").pop();
+      const body = await readJsonBody(req);
+
+      const orders = readJson(ORDERS);
+
+      const index =
+        orders.findIndex(x => String(x.id) === String(id));
+
+      if (index === -1) {
+        return json(res, 404, {
+          ok: false,
+          error: "Order not found"
+        });
+      }
+
+      orders[index] = {
+        ...orders[index],
+        ...body,
+        id: orders[index].id
+      };
+
+      writeJson(ORDERS, orders);
+
       return json(res, 200, {
         ok: true,
-        supabase: Boolean(
-          SUPABASE_URL &&
-          SUPABASE_SECRET_KEY
-        )
+        order: orders[index]
       });
     }
 
-    /* ---------- STATIC ---------- */
+    // STATIC FILES
+    const filePath = safeStaticPath(p);
 
-    if (req.method === "GET") {
-      return serveFile(req, res, pathname);
+    if (!filePath) {
+      return json(res, 403, {
+        ok: false,
+        error: "Forbidden"
+      });
+    }
+
+    if (fs.existsSync(filePath)) {
+      const stat = fs.statSync(filePath);
+
+      if (stat.isFile()) {
+        res.writeHead(200, {
+          "Content-Type": contentType(filePath),
+          "Cache-Control": "public, max-age=3600"
+        });
+
+        return fs.createReadStream(filePath).pipe(res);
+      }
+    }
+
+    // SPA FALLBACK
+    const indexPath =
+      path.join(PUBLIC, "index.html");
+
+    if (fs.existsSync(indexPath)) {
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8"
+      });
+
+      return fs.createReadStream(indexPath).pipe(res);
     }
 
     return json(res, 404, {
@@ -661,15 +892,10 @@ function serveFile(req, res, pathname) {
       error: error.message || "Server error"
     });
   }
-});
+}
 
-server.listen(PORT, () => {
-  console.log(
-    Shop Black server running on port ${PORT}
-  );
+const server = http.createServer(handle);
 
-  console.log(
-    "Supabase:",
-    SUPABASE_URL ? "configured" : "NOT configured"
-  );
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(Shop Black running on port ${PORT});
 });
