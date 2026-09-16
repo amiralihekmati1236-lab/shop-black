@@ -6,24 +6,49 @@ const { URL } = require("url");
 
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = __dirname;
-const PUBLIC = ROOT;
-
-const DATA = path.join(ROOT, "data");
-const ORDERS = path.join(DATA, "orders.json");
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "1236";
+
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").replace(/\/+$/, "");
-const SUPABASE_SECRET_KEY = String(process.env.SUPABASE_SECRET_KEY || "");
+const SUPABASE_SECRET_KEY = String(
+  process.env.SUPABASE_SECRET_KEY || ""
+);
 
 const sessions = new Set();
 
+const DATA = path.join(ROOT, "data");
+const ORDERS_FILE = path.join(DATA, "orders.json");
+
 fs.mkdirSync(DATA, { recursive: true });
 
-if (!fs.existsSync(ORDERS)) {
-  fs.writeFileSync(ORDERS, "[]");
+if (!fs.existsSync(ORDERS_FILE)) {
+  fs.writeFileSync(ORDERS_FILE, "[]", "utf8");
 }
 
-function readJson(file) {
+/* =========================
+   BASIC HELPERS
+========================= */
+
+function json(res, status, data) {
+  const body = JSON.stringify(data);
+
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store"
+  });
+
+  res.end(body);
+}
+
+function text(res, status, body, type = "text/plain; charset=utf-8") {
+  res.writeHead(status, {
+    "Content-Type": type
+  });
+
+  res.end(body);
+}
+
+function readJsonFile(file) {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
   } catch {
@@ -31,77 +56,58 @@ function readJson(file) {
   }
 }
 
-function writeJson(file, value) {
-  fs.writeFileSync(file, JSON.stringify(value, null, 2), "utf8");
+function writeJsonFile(file, data) {
+  fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf8");
 }
 
-function send(res, status, body, type = "text/html; charset=utf-8", extra = {}) {
-  res.writeHead(status, {
-    "Content-Type": type,
-    "Cache-Control": "no-store",
-    ...extra
-  });
-  res.end(body);
+function randomId() {
+  return crypto.randomBytes(24).toString("hex");
 }
 
-function json(res, status, value) {
-  send(
-    res,
-    status,
-    JSON.stringify(value),
-    "application/json; charset=utf-8"
-  );
+function getSession(req) {
+  const cookie = req.headers.cookie || "";
+
+  const match = cookie.match(/session=([^;]+)/);
+
+  return match ? match[1] : null;
 }
 
-function jsonWithCookie(res, status, value, token) {
-  send(
-    res,
-    status,
-    JSON.stringify(value),
-    "application/json; charset=utf-8",
-    {
-      "Set-Cookie":
-        shop_session=${token}; HttpOnly; SameSite=Lax; Path=/
-    }
-  );
-}
-
-function cookieSession(req) {
-  const c = req.headers.cookie || "";
-  const m = c.match(/shop_session=([^;]+)/);
-  return m && sessions.has(m[1]) ? m[1] : null;
+function isAdmin(req) {
+  const session = getSession(req);
+  return session && sessions.has(session);
 }
 
 function requireAdmin(req, res) {
-  if (!cookieSession(req)) {
+  if (!isAdmin(req)) {
     json(res, 401, {
       ok: false,
-      error: "دسترسی غیرمجاز"
+      error: "Unauthorized"
     });
+
     return false;
   }
 
   return true;
 }
 
-function parseBody(req, limit = 15 * 1024 * 1024) {
+function readBody(req) {
   return new Promise((resolve, reject) => {
-    let data = "";
+    let body = "";
 
     req.on("data", chunk => {
-      data += chunk;
+      body += chunk;
 
-      if (data.length > limit) {
-        reject(new Error("حجم درخواست زیاد است"));
+      if (body.length > 25 * 1024 * 1024) {
+        reject(new Error("Request too large"));
         req.destroy();
       }
     });
 
     req.on("end", () => {
       try {
-        resolve(data ? JSON.parse(data) : {});
+        resolve(body ? JSON.parse(body) : {});
       } catch {
-        reject(new Error("JSON نامعتبر"));
+        resolve({});
       }
     });
 
@@ -109,120 +115,140 @@ function parseBody(req, limit = 15 * 1024 * 1024) {
   });
 }
 
-function mimeExt(mime) {
-  const map = {
-    "image/jpeg": "jpg",
-    "image/png": "png",
-    "image/webp": "webp",
-    "image/gif": "gif"
-  };
+/* =========================
+   SUPABASE
+========================= */
 
-  return map[mime] || null;
-}
-
-function mapProduct(row) {
-  return {
-    id: String(row.id),
-    name: row.name || "",
-    price: Number(row.price || 0),
-    image: row.image || "",
-    description: row.description || "",
-    createdAt: row.created_at || ""
-  };
-}
-
-function supabaseHeaders(extra = {}) {
-  return {
-    "apikey": SUPABASE_SECRET_KEY,
-    "Authorization": Bearer ${SUPABASE_SECRET_KEY},
-    "Content-Type": "application/json",
-    ...extra
-  };
-}
-
-async function supabaseRequest(endpoint, options = {}) {
+async function supabaseRequest(table, options = {}) {
   if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) {
-    throw new Error("تنظیمات Supabase در Render کامل نیست");
+    throw new Error("Supabase is not configured");
   }
 
-  const response = await fetch(
-    ${SUPABASE_URL}${endpoint},
-    {
-      ...options,
-      headers: {
-        ...supabaseHeaders(),
-        ...(options.headers || {})
-      }
-    }
-  );
+  const url = ${SUPABASE_URL}/rest/v1/${table};
 
-  const text = await response.text();
+  const headers = {
+    apikey: SUPABASE_SECRET_KEY,
+    Authorization: Bearer ${SUPABASE_SECRET_KEY},
+    "Content-Type": "application/json",
+    ...(options.headers || {})
+  };
 
-  let data = null;
+  const response = await fetch(url, {
+    method: options.method || "GET",
+    headers,
+    body: options.body
+      ? JSON.stringify(options.body)
+      : undefined
+  });
+
+  const raw = await response.text();
+
+  let data;
 
   try {
-    data = text ? JSON.parse(text) : null;
+    data = raw ? JSON.parse(raw) : null;
   } catch {
-    data = text;
-  }async function createProduct(product) {
+    data = raw;
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      Supabase error ${response.status}: ${raw}
+    );
+  }
+
+  return data;
+}
+
+function mapProduct(product) {
+  return {
+    id: String(product.id),
+    name: product.name || "",
+    price: Number(product.price || 0),
+    image: product.image || "",
+    description: product.description || "",
+    createdAt: product.created_at || ""
+  };
+}
+
+/* =========================
+   PRODUCTS
+========================= */
+
+async function getProducts() {
   const data = await supabaseRequest(
-    "/rest/v1/products",
-    {
-      method: "POST",
-      headers: {
-        "Prefer": "return=representation"
-      },
-      body: JSON.stringify({
-        name: product.name,
-        price: product.price,
-        image: product.image,
-        description: product.description
-      })
-    }
+    "products?select=*&order=created_at.desc"
   );
 
-  return mapProduct(data[0]);
+  return Array.isArray(data)
+    ? data.map(mapProduct)
+    : [];
+}
+
+async function createProduct(product) {
+  const data = await supabaseRequest("products", {method: "POST",
+    headers: {
+      Prefer: "return=representation"
+    },
+    body: {
+      name: String(product.name || ""),
+      price: Number(product.price || 0),
+      image: String(product.image || ""),
+      description: String(product.description || "")
+    }
+  });
+
+  return data && data[0]
+    ? mapProduct(data[0])
+    : null;
 }
 
 async function updateProduct(id, product) {
   const data = await supabaseRequest(
-    /rest/v1/products?id=eq.${encodeURIComponent(id)},
+    products?id=eq.${encodeURIComponent(id)},
     {
       method: "PATCH",
       headers: {
-        "Prefer": "return=representation"
+        Prefer: "return=representation"
       },
-      body: JSON.stringify({
-        name: product.name,
-        price: product.price,
-        image: product.image,
-        description: product.description
-      })
+      body: {
+        name: String(product.name || ""),
+        price: Number(product.price || 0),
+        image: String(product.image || ""),
+        description: String(product.description || "")
+      }
     }
   );
 
-  if (!data.length) {
-    throw new Error("محصول پیدا نشد");
-  }
-
-  return mapProduct(data[0]);
+  return data && data[0]
+    ? mapProduct(data[0])
+    : null;
 }
 
 async function deleteProduct(id) {
   await supabaseRequest(
-    /rest/v1/products?id=eq.${encodeURIComponent(id)},
+    products?id=eq.${encodeURIComponent(id)},
     {
       method: "DELETE"
     }
   );
 }
 
-async function ensureStorageBucket() {
+/* =========================
+   STORAGE
+========================= */
+
+async function createStorageBucket() {
   try {
-    await supabaseRequest(
-      "/storage/v1/bucket",
+    const response = await fetch(
+      ${SUPABASE_URL}/storage/v1/bucket,
       {
         method: "POST",
+        headers: {
+          apikey: SUPABASE_SECRET_KEY,
+          Authorization: Bearer ${SUPABASE_SECRET_KEY},
+          "Content-Type": "application/json"
+        },
         body: JSON.stringify({
           id: "product-images",
           name: "product-images",
@@ -230,131 +256,252 @@ async function ensureStorageBucket() {
         })
       }
     );
-  } catch (e) {
-    // اگر bucket از قبل وجود داشته باشد، مشکلی نیست.
+
+    if (
+      response.ok ||
+      response.status === 409
+    ) {
+      return true;
+    }
+
+    return false;
+  } catch {
+    return false;
   }
 }
 
-async function uploadImage(filename, mime, buffer) {
-  await ensureStorageBucket();
+async function uploadImage(base64, originalName) {
+  if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) {
+    throw new Error("Supabase is not configured");
+  }
 
-  const response = await fetch(
-    ${SUPABASE_URL}/storage/v1/object/product-images/${encodeURIComponent(filename)},
-    {
-      method: "POST",
-      headers: {
-        "apikey": SUPABASE_SECRET_KEY,
-        "Authorization": Bearer ${SUPABASE_SECRET_KEY},
-        "Content-Type": mime,
-        "x-upsert": "true"
-      },
-      body: buffer
-    }
+  await createStorageBucket();
+
+  const match = String(base64).match(
+    /^data:([^;]+);base64,(.+)$/
   );
 
+  if (!match) {
+    throw new Error("Invalid image");
+  }
+
+  const contentType = match[1];
+  const buffer = Buffer.from(match[2], "base64");
+
+  const ext =
+    contentType === "image/png"
+      ? "png"
+      : contentType === "image/webp"
+      ? "webp"
+      : "jpg";
+
+  const filename =
+    ${Date.now()}-${crypto.randomBytes(8).toString("hex")}.${ext};
+
+  const uploadUrl =
+    ${SUPABASE_URL}/storage/v1/object/product-images/${filename};
+
+  const response = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      apikey: SUPABASE_SECRET_KEY,
+      Authorization: Bearer ${SUPABASE_SECRET_KEY},
+      "Content-Type": contentType,
+      "x-upsert": "true"
+    },
+    body: buffer
+  });
+
+  const raw = await response.text();
+
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || "آپلود عکس ناموفق بود");
+    throw new Error(
+      Image upload failed: ${response.status} ${raw}
+    );
   }
 
   return ${SUPABASE_URL}/storage/v1/object/public/product-images/${filename};
 }
 
-async function deleteImage(url) {
-  if (!url || !url.includes("/storage/v1/object/public/product-images/")) {
-    return;
+/* =========================
+   STATIC FILES
+========================= */
+
+const MIME = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon"
+};
+
+function serveFile(req, res, pathname) {
+  let filePath = path.join(ROOT, pathname);
+
+  if (pathname === "/") {
+    filePath = path.join(ROOT, "index.html");
   }
 
-  const marker = "/storage/v1/object/public/product-images/";
-  const filename = decodeURIComponent(url.split(marker)[1] || "");
-
-  if (!filename) return;
-
-  try {
-    await supabaseRequest(
-      "/storage/v1/object/product-images",
-      {
-        method: "DELETE",
-        body: JSON.stringify({
-          prefixes: [filename]
-        })
-      }
-    );
-  } catch (e) {
-    console.error("Image delete error:", e.message);
+  if (!filePath.startsWith(ROOT)) {
+    return text(res, 403, "Forbidden");
   }
+
+  if (!fs.existsSync(filePath)) {
+    return text(res, 404, "Not Found");
+  }
+
+  const stat = fs.statSync(filePath);
+
+  if (!stat.isFile()) {
+    return text(res, 404, "Not Found");
+  }
+
+  const ext = path.extname(filePath).toLowerCase();
+
+  res.writeHead(200, {
+    "Content-Type":
+      MIME[ext] || "application/octet-stream"
+  });
+
+  fs.createReadStream(filePath).pipe(res);
 }
 
-const server = http.createServer(async (req, res) => {
-  const u = new URL(
-    req.url,
-    http://${req.headers.host || "localhost"}
-  );
-
-  const p = u.pathname;
-
+/* =========================
+   SERVER
+========================= */const server = http.createServer(async (req, res) => {
   try {
+    const requestUrl = new URL(
+      req.url,
+      http://${req.headers.host || "localhost"}
+    );
 
-    // =========================
-    // PRODUCTS
-    // =========================
+    const pathname = requestUrl.pathname;
 
-    if (p === "/api/products" && req.method === "GET") {
-      const products = await getProducts();
-      return json(res, 200, products);
-    }
+    /* ---------- LOGIN ---------- */
 
-    // =========================
-    // ADMIN LOGIN
-    // =========================
+    if (
+      pathname === "/api/admin/login" &&
+      req.method === "POST"
+    ) {
+      const body = await readBody(req);
 
-    if (p === "/api/admin/login" && req.method === "POST") {
-      const body = await parseBody(req, 100000);
-
-      if (String(body.password || "") !== ADMIN_PASSWORD) {
+      if (
+        String(body.password || "") !==
+        String(ADMIN_PASSWORD)
+      ) {
         return json(res, 401, {
           ok: false,
           error: "رمز عبور اشتباه است"
         });
       }
 
-      const token = crypto.randomBytes(32).toString("hex");
+      const session = randomId();
 
-      sessions.add(token);
+      sessions.add(session);
 
-      return jsonWithCookie(
-        res,
-        200,
-        { ok: true },
-        token
+      res.writeHead(200, {
+        "Content-Type":
+          "application/json; charset=utf-8",
+        "Set-Cookie":
+          session=${session}; HttpOnly; Path=/; SameSite=Lax
+      });
+
+      return res.end(
+        JSON.stringify({
+          ok: true
+        })
       );
     }
-if (p === "/api/admin/products" && req.method === "POST") {
+
+    /* ---------- LOGOUT ---------- */
+
+    if (
+      pathname === "/api/admin/logout" &&
+      req.method === "POST"
+    ) {
+      const session = getSession(req);
+
+      if (session) {
+        sessions.delete(session);
+      }
+
+      res.writeHead(200, {
+        "Content-Type":
+          "application/json; charset=utf-8",
+        "Set-Cookie":
+          "session=; Max-Age=0; HttpOnly; Path=/; SameSite=Lax"
+      });
+
+      return res.end(
+        JSON.stringify({
+          ok: true
+        })
+      );
+    }
+
+    /* ---------- CHECK ADMIN ---------- */
+
+    if (
+      pathname === "/api/admin/me" &&
+      req.method === "GET"
+    ) {
+      return json(res, 200, {
+        ok: true,
+        admin: isAdmin(req)
+      });
+    }
+
+    /* ---------- PUBLIC PRODUCTS ---------- */
+
+    if (
+      pathname === "/api/products" &&
+      req.method === "GET"
+    ) {
+      const products = await getProducts();
+
+      return json(res, 200, products);
+    }
+
+    /* ---------- ADMIN PRODUCTS ---------- */
+
+    if (
+      pathname === "/api/admin/products" &&
+      req.method === "GET"
+    ) {
       if (!requireAdmin(req, res)) return;
 
-      const body = await parseBody(req);
+      const products = await getProducts();
 
-      const name = String(body.name || "").trim();
-      const price = Number(body.price);
-      const description = String(body.description || "").trim();
-      const image = String(body.image || "").trim();
+      return json(res, 200, products);
+    }
 
-      if (
-        !name ||
-        !Number.isFinite(price) ||
-        price < 0
-      ) {
+    /* ---------- ADD PRODUCT ---------- */
+
+    if (
+      pathname === "/api/admin/products" &&
+      req.method === "POST"
+    ) {
+      if (!requireAdmin(req, res)) return;
+
+      const body = await readBody(req);
+
+      if (!body.name) {
         return json(res, 400, {
           ok: false,
-          error: "نام و قیمت معتبر وارد کنید"
+          error: "نام محصول وارد نشده"
         });
       }
 
       const product = await createProduct({
-        name,
-        price: Math.round(price),
-        description,
-        image
+        name: body.name,
+        price: body.price,
+        image: body.image,
+        description: body.description
       });
 
       return json(res, 201, {
@@ -363,65 +510,23 @@ if (p === "/api/admin/products" && req.method === "POST") {
       });
     }
 
-    // =========================
-    // EDIT PRODUCT
-    // =========================
+    /* ---------- EDIT PRODUCT ---------- */
 
     if (
-      p.startsWith("/api/admin/products/") &&
+      pathname.startsWith("/api/admin/products/") &&
       req.method === "PUT"
     ) {
       if (!requireAdmin(req, res)) return;
 
-      const pid = p.split("/").pop();
+      const id = pathname.split("/").pop();
 
-      const body = await parseBody(req);
+      const body = await readBody(req);
 
-      const products = await getProducts();
-
-      const oldProduct = products.find(
-        x => x.id === pid
-      );
-
-      if (!oldProduct) {
-        return json(res, 404, {
-          ok: false,
-          error: "محصول پیدا نشد"
-        });
-      }
-
-      const name = String(
-        body.name ?? oldProduct.name
-      ).trim();
-
-      const price = Number(
-        body.price ?? oldProduct.price
-      );
-
-      const description = String(
-        body.description ?? oldProduct.description
-      ).trim();
-
-      const image = String(
-        body.image ?? oldProduct.image
-      ).trim();
-
-      if (
-        !name ||
-        !Number.isFinite(price) ||
-        price < 0
-      ) {
-        return json(res, 400, {
-          ok: false,
-          error: "اطلاعات محصول نامعتبر است"
-        });
-      }
-
-      const product = await updateProduct(pid, {
-        name,
-        price: Math.round(price),
-        description,
-        image
+      const product = await updateProduct(id, {
+        name: body.name,
+        price: body.price,
+        image: body.image,
+        description: body.description
       });
 
       return json(res, 200, {
@@ -430,173 +535,76 @@ if (p === "/api/admin/products" && req.method === "POST") {
       });
     }
 
-    // =========================
-    // DELETE PRODUCT
-    // =========================
+    /* ---------- DELETE PRODUCT ---------- */
 
     if (
-      p.startsWith("/api/admin/products/") &&
+      pathname.startsWith("/api/admin/products/") &&
       req.method === "DELETE"
     ) {
       if (!requireAdmin(req, res)) return;
 
-      const pid = p.split("/").pop();
+      const id = pathname.split("/").pop();
 
-      const products = await getProducts();
-
-      const item = products.find(
-        x => x.id === pid
-      );
-
-      if (!item) {
-        return json(res, 404, {
-          ok: false,
-          error: "محصول پیدا نشد"
-        });
-      }
-
-      await deleteProduct(pid);
-
-      await deleteImage(item.image);
+      await deleteProduct(id);
 
       return json(res, 200, {
         ok: true
       });
     }
 
-    // =========================
-    // IMAGE UPLOAD
-    // =========================
+    /* ---------- UPLOAD IMAGE ---------- */
 
     if (
-      p === "/api/admin/upload" &&
+      pathname === "/api/admin/upload" &&
       req.method === "POST"
     ) {
       if (!requireAdmin(req, res)) return;
 
-      const body = await parseBody(
-        req,
-        15 * 1024 * 1024
-      );
+      const body = await readBody(req);
 
-      const mime = String(body.mime || "");
-
-      const ext = mimeExt(mime);
-
-      if (!ext || !body.data) {
+      if (!body.image) {
         return json(res, 400, {
           ok: false,
-          error:
-            "فقط JPG، PNG، WEBP یا GIF مجاز است"
+          error: "تصویر ارسال نشده"
         });
       }
 
-      const raw = String(body.data).replace(
-        /^data:[^;]+;base64,/,
-        ""
-      );
+      const imageUrl = await uploadImage(
+        body.image,
+        body.name || "product"
+      );return json(res, 200, {
+        ok: true,
+        url: imageUrl,
+        image: imageUrl
+      });
+    }
 
-      const buffer = Buffer.from(
-        raw,
-        "base64"
-      );
+    /* ---------- ORDERS ---------- */
 
-      if (buffer.length > 8 * 1024 * 1024) {
-        return json(res, 400, {
-          ok: false,
-          error:
-            "حجم عکس باید کمتر از ۸ مگابایت باشد"
-        });
-      }
-
-      const filename =
-        ${Date.now()}-${cryptoif (
-      p === "/api/orders" &&
+    if (
+      pathname === "/api/orders" &&
       req.method === "POST"
     ) {
-      const body = await parseBody(
-        req,
-        500000
-      );
+      const body = await readBody(req);
 
-      const items = Array.isArray(body.items)
-        ? body.items
-        : [];
-
-      if (!items.length) {
-        return json(res, 400, {
-          ok: false,
-          error: "سبد خرید خالی است"
-        });
-      }
-
-      const products = await getProducts();
-
-      const clean = [];
-
-      let total = 0;
-
-      for (const x of items) {
-        const pr = products.find(
-          y => y.id === String(x.id)
-        );
-
-        const qty = Math.max(
-          1,
-          Math.min(
-            99,
-            Number(x.qty) || 1
-          )
-        );
-
-        if (!pr) continue;
-
-        clean.push({
-          id: pr.id,
-          name: pr.name,
-          price: pr.price,
-          qty
-        });
-
-        total += pr.price * qty;
-      }
-
-      if (!clean.length) {
-        return json(res, 400, {
-          ok: false,
-          error:
-            "محصولات سفارش پیدا نشدند"
-        });
-      }
+      const orders = readJsonFile(ORDERS_FILE);
 
       const order = {
-        id: crypto.randomUUID(),
-        items: clean,
-        total,
-        customer: {
-          name: String(
-            body.customer?.name || ""
-          ).trim(),
-
-          phone: String(
-            body.customer?.phone || ""
-          ).trim()
-        },
-
-        status: "در انتظار پرداخت",
-
-        createdAt:
-          new Date().toISOString()
+        id: randomId(),
+        createdAt: new Date().toISOString(),
+        name: body.name || "",
+        phone: body.phone || "",
+        address: body.address || "",
+        items: Array.isArray(body.items)
+          ? body.items
+          : [],
+        total: Number(body.total || 0),
+        status: "new"
       };
-
-      const orders = readJson(ORDERS);
 
       orders.unshift(order);
 
-      writeJson(
-        ORDERS,
-        orders
-      );
+      writeJsonFile(ORDERS_FILE, orders);
 
       return json(res, 201, {
         ok: true,
@@ -604,12 +612,10 @@ if (p === "/api/admin/products" && req.method === "POST") {
       });
     }
 
-    // =========================
-    // ADMIN ORDERS
-    // =========================
+    /* ---------- ADMIN ORDERS ---------- */
 
     if (
-      p === "/api/admin/orders" &&
+      pathname === "/api/admin/orders" &&
       req.method === "GET"
     ) {
       if (!requireAdmin(req, res)) return;
@@ -617,184 +623,53 @@ if (p === "/api/admin/products" && req.method === "POST") {
       return json(
         res,
         200,
-        readJson(ORDERS)
+        readJsonFile(ORDERS_FILE)
       );
     }
 
-    // =========================
-    // ADMIN PAGE
-    // =========================
-
-    if (p === "/admin") {
-      return send(
-        res,
-        200,
-        fs.readFileSync(
-          path.join(
-            PUBLIC,
-            "admin.html"
-          ),
-          "utf8"
-        )
-      );
-    }
-
-    // =========================
-    // STATIC FILES
-    // =========================
-
-    let file =
-      p === "/"
-        ? "/index.html"
-        : p;
-
-    file = path
-      .normalize(file)
-      .replace(
-        /^(\.\.[\/\\])+/,
-        ""
-      );
-
-    const full = path.join(
-      PUBLIC,
-      file
-    );
+    /* ---------- HEALTH ---------- */
 
     if (
-      !full.startsWith(PUBLIC) ||
-      !fs.existsSync(full) ||
-      fs.statSync(full).isDirectory()
+      pathname === "/api/health" &&
+      req.method === "GET"
     ) {
-      return send(
-        res,
-        404,
-        "صفحه پیدا نشد",
-        "text/plain; charset=utf-8"
-      );
+      return json(res, 200, {
+        ok: true,
+        supabase: Boolean(
+          SUPABASE_URL &&
+          SUPABASE_SECRET_KEY
+        )
+      });
     }
 
-    const ext =
-      path.extname(full)
-        .toLowerCase();
+    /* ---------- STATIC ---------- */
 
-    const types = {
-      ".html":
-        "text/html; charset=utf-8",
+    if (req.method === "GET") {
+      return serveFile(req, res, pathname);
+    }
 
-      ".css":
-        "text/css; charset=utf-8",
+    return json(res, 404, {
+      ok: false,
+      error: "Not found"
+    });
 
-      ".js":
-        "text/javascript; charset=utf-8",
+  } catch (error) {
+    console.error(error);
 
-      ".json":
-        "application/json; charset=utf-8",
-
-      ".svg":
-        "image/svg+xml",
-
-      ".png":
-        "image/png",
-
-      ".jpg":
-        "image/jpeg",
-
-      ".jpeg":
-        "image/jpeg",
-
-      ".webp":
-        "image/webp",
-
-      ".gif":
-        "image/gif"
-    };
-
-    return send(
-      res,
-      200,
-      fs.readFileSync(full),
-      types[ext] ||
-        "application/octet-stream"
-    );
-
-  } catch (e) {
-    console.error(e);
-
-    return json(
-      res,
-      500,
-      {
-        ok: false,
-        error:
-          e.message ||
-          "خطای سرور"
-      }
-    );
+    return json(res, 500, {
+      ok: false,
+      error: error.message || "Server error"
+    });
   }
 });
 
-server.listen(
-  PORT,
-  () => {
-    console.log(
-      SHOP BLACK: http://localhost:${PORT}
-    );
-  }
-);
-          .randomBytes(5)
-          .toString("hex")}.${ext};
-
-      const url = await uploadImage(
-        filename,
-        mime,
-        buffer
-      );
-
-      return json(res, 201, {
-        ok: true,
-        url
-      });
-    }
-
-    // =========================
-    // ORDERS
-    // =========================
-    if (p === "/api/admin/logout" && req.method === "POST") {
-      const s = cookieSession(req);
-
-      if (s) {
-        sessions.delete(s);
-      }
-
-      return json(res, 200, { ok: true });
-    }
-
-    if (p === "/api/admin/me" && req.method === "GET") {
-      return json(res, 200, {
-        loggedIn: !!cookieSession(req)
-      });
-    }
-
-    // =========================
-    // ADD PRODUCT
-    // =========================
-
-  if (!response.ok) {
-    const message =
-      typeof data === "object" && data
-        ? data.message ⠞⠵⠟⠵⠵⠟⠞⠟⠺⠺⠟⠵ JSON.stringify(data)
-        : String(data || response.statusText);
-
-    throw new Error(message);
-  }
-
-  return data;
-}
-
-async function getProducts() {
-  const data = await supabaseRequest(
-    "/rest/v1/products?select=*&order=created_at.desc"
+server.listen(PORT, () => {
+  console.log(
+    Shop Black server running on port ${PORT}
   );
 
-  return Array.isArray(data) ? data.map(mapProduct) : [];
-}
+  console.log(
+    "Supabase:",
+    SUPABASE_URL ? "configured" : "NOT configured"
+  );
+});
