@@ -1,12 +1,1 @@
-{
-  "name": "shop-black-pro",
-  "version": "2.0.0",
-  "description": "SHOP BLACK - Persian dark/gold storefront with admin panel",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
-  "engines": {
-    "node": ">=18"
-  }
-}
+{"name":"shop-black-gun","version":"2.0.0","private":true,"scripts":{"start":"node server.js"}}
