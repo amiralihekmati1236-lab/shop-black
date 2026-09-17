@@ -1,18 +1,1 @@
-<!doctype html>
-<html lang="fa" dir="rtl">
-<head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SHOP BLACK | فروشگاه</title><link rel="stylesheet" href="/style.css">
-</head>
-<body>
-<header class="top"><div class="wrap nav"><a class="brand" href="/">SHOP <b>BLACK</b></a><div class="links"><a href="#products">محصولات</a><a href="#about">درباره ما</a><a href="/admin">مدیریت</a><button class="cartBtn" onclick="openCart()">🛒 سبد <span id="cartCount">0</span></button></div></div></header>
-<main>
-<section class="hero"><div class="wrap heroIn"><div><span class="pill">SHOP.BLACK.GUN</span><h1>فروشگاه <em>SHOP BLACK</em></h1><p>محصولات منتخب با طراحی شیک، ساده و حرفه‌ای.</p><a class="goldBtn" href="#products">مشاهده محصولات</a></div><div class="heroCard"><div>BLACK</div><small>PREMIUM STORE</small></div></div></section>
-<section id="products" class="wrap section"><div class="sectionHead"><div><span class="eyebrow">CATALOG</span><h2>محصولات</h2></div><input id="search" class="search" placeholder="جستجوی محصول..." oninput="renderProducts()"></div><div id="grid" class="grid"></div></section>
-<section id="about" class="wrap info"><div><span class="eyebrow">SHOP BLACK</span><h2>خرید آسان و مطمئن</h2><p>محصول را انتخاب کنید، به سبد اضافه کنید و برای ثبت سفارش مبلغ را طبق اطلاعات پرداخت واریز کنید.</p></div><div class="infoBox">پشتیبانی تلگرام<br><b>@BlackGun_support</b></div></section>
-</main>
-<footer>© SHOP BLACK — همه حقوق محفوظ است.</footer>
-<div id="cartModal" class="modal"><div class="modalBox"><button class="close" onclick="closeCart()">×</button><h2>سبد خرید</h2><div id="cartItems"></div><div class="total">جمع کل: <b id="cartTotal">۰ تومان</b></div><button class="goldBtn wide" onclick="checkout()">ادامه ثبت سفارش</button></div></div>
-<div id="payModal" class="modal"><div class="modalBox"><button class="close" onclick="closePay()">×</button><h2>ثبت سفارش</h2><div class="pay"><p>مبلغ سفارش:</p><strong id="payTotal"></strong><p>جهت ثبت سفارش خود مبلغ کالا را به شماره کارت زیر واریز کنید و فیش واریزی رو در تلگرام به آیدی زیر ارسال کنید.</p><div class="cardNo">6219 8614 5102 5562</div><div class="support">@BlackGun_support</div><a class="goldBtn wide" href="https://t.me/BlackGun_support" target="_blank">ارسال فیش در تلگرام</a></div></div></div>
-<script src="/app.js"></script>
-</body></html>
+<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>فروشگاه بلک گان | 𝗕𝗹𝗮𝗰𝗸 𝗚𝘂𝗻</title><link rel="stylesheet" href="/style.css"></head><body><div class="floatLogo">Shop.Black.gun</div><header><a class="brand" href="/">فروشگاه بلک گان <span>| 𝗕𝗹𝗮𝗰𝗸 𝗚𝘂𝗻</span></a><nav><a href="#products">محصولات</a><a href="#videos">ویدیوها</a><button id="cartBtn">سبد خرید <b id="count">۰</b></button></nav></header><main><section class="hero"><div><small>SHOP.BLACK.GUN</small><h1>فروشگاه بلک گان<br><em>𝗕𝗹𝗮𝗰𝗸 𝗚𝘂𝗻</em></h1><p>فروشگاهی سریع، مدرن و روان با مدیریت کامل محصولات.</p><a class="gold" href="#products">مشاهده محصولات</a></div><div class="cube"><i>SHOP</i><b>BLACK</b><strong>GUN</strong></div></section><section id="products"><div class="head"><div><small>PRODUCTS</small><h2>محصولات</h2></div><input id="search" placeholder="جستجوی محصول..."></div><div id="grid" class="grid"></div></section><section id="videos"><small>VIDEOS</small><h2>ویدیوهای محصولات</h2><div id="videosGrid" class="videos"></div></section></main><aside id="cart"><div class="carthead"><h2>سبد خرید</h2><button id="close">×</button></div><div id="items"></div><div class="total">مجموع: <b id="sum">۰ میلیون تومان</b><button id="checkout" class="gold full">ادامه و ثبت سفارش</button></div></aside><div id="toast"></div><script src="/app.js"></script></body></html>
