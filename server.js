@@ -106,7 +106,7 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==="POST"&&p==="/api/admin/logout"){
       const m=(req.headers.cookie||"").match(/(?:^|;\s*)admin_session=([^;]+)/);
       if(m)sessions.delete(m[1]);
-      return sendJson(res,200,{ok:true},{Set-Cookie:"admin_session=; Max-Age=0; Path=/"});
+      return sendJson(res,200,{ok:true},{"Set-Cookie":"admin_session=; Max-Age=0; Path=/"});
     }
     if(p.startsWith("/api/admin/")&&!isAdmin(req)) return sendJson(res,401,{error:"unauthorized"});
     if(req.method==="GET"&&p==="/api/admin/check") return sendJson(res,200,{ok:true});
