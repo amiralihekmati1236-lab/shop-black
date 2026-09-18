@@ -101,9 +101,8 @@ const server=http.createServer(async(req,res)=>{
       const data=JSON.parse(await body(req)||"{}");
       if(data.password!==ADMIN_PASSWORD) return sendJson(res,401,{error:"رمز عبور اشتباه است"});
       const token=crypto.randomBytes(24).toString("hex");
-      sessions.set(token,Date.now()+86400000);
-      return sendJson(res,200,{ok:true},{"Set-Cookie":"admin_session="+token+"; HttpOnly; Path=/; SameSite=Lax"});
-    }
+      sessions.set(token,Date.now()+86400000); 
+    }return sendJson(res, 200, {ok:true}, {"Set-Cookie": "admin_session=" + token + "; HttpOnly; Path=/; SameSite=Lax"});
     if(req.method==="POST"&&p==="/api/admin/logout"){
       const m=(req.headers.cookie||"").match(/(?:^|;\s*)admin_session=([^;]+)/);
       if(m)sessions.delete(m[1]);
