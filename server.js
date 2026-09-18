@@ -1,29 +1,151 @@
-const http=require('http'),fs=require('fs'),path=require('path'),crypto=require('crypto');
-const PORT=process.env.PORT||3000,ROOT=__dirname,ADMIN_PASSWORD=process.env.ADMIN_PASSWORD||'1236';
-const SB=(process.env.SUPABASE_URL||'').replace(/\/+$/,''),KEY=process.env.SUPABASE_SECRET_KEY||'',sessions=new Map();
-const send=(res,s,d,h={})=>{res.writeHead(s,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store',...h});res.end(JSON.stringify(d))};
-const read= req=>new Promise((ok,no)=>{let a=[];req.on('data',x=>a.push(x));req.on('end',()=>ok(Buffer.concat(a).toString()));req.on('error',no)});
-const cookies=req=>Object.fromEntries((req.headers.cookie||'').split(';').filter(Boolean).map(x=>{let i=x.indexOf('=');return[x.slice(0,i).trim(),decodeURIComponent(x.slice(i+1).trim())]}));
-const isAdmin=req=>{let t=cookies(req).admin_session,e=t&&sessions.get(t);if(!e)return false;if(e<Date.now()){sessions.delete(t);return false}return true};
-async function sb(ep,opt={}){if(!SB||!KEY)throw Error('Supabase environment variables are missing.');let r=await fetch(SB+ep,{...opt,headers:{apikey:KEY,Authorization:`Bearer ${KEY}`,...(opt.headers||{})}}),t=await r.text(),d;try{d=t?JSON.parse(t):null}catch{d=t}if(!r.ok)throw Error(d?.message||d?.error||t||'Supabase error');return d}
-async function api(req,res,u){try{
- if(req.method==='GET'&&u.pathname==='/api/products')return send(res,200,await sb('/rest/v1/products?select=*&order=created_at.desc'));
- if(req.method==='GET'&&u.pathname==='/api/videos')return send(res,200,await sb('/rest/v1/videos?select=*&order=created_at.desc'));
- if(req.method==='POST'&&u.pathname==='/api/orders'){let d=JSON.parse(await read(req)||'{}');if(!d.customer_name||!d.phone||!Array.isArray(d.items)||!d.items.length)return send(res,400,{error:'اطلاعات سفارش ناقص است'});let o={customer_name:String(d.customer_name),phone:String(d.phone),address:String(d.address||''),items:d.items,total:Number(d.total||0),status:'new'};let r=await sb('/rest/v1/orders',{method:'POST',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(o)});return send(res,201,{ok:true,order:r[0]||r})}
- if(req.method==='POST'&&u.pathname==='/api/admin/login'){let d=JSON.parse(await read(req)||'{}');if(String(d.password)!==ADMIN_PASSWORD)return send(res,401,{error:'رمز مدیریت اشتباه است'});let t=crypto.randomBytes(32).toString('hex');sessions.set(t,Date.now()+86400000);return send(res,200,{ok:true},{'Set-Cookie':`admin_session=${t}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400`})}
- if(req.method==='POST'&&u.pathname==='/api/admin/logout'){let t=cookies(req).admin_session;if(t)sessions.delete(t);return send(res,200,{ok:true},{'Set-Cookie':'admin_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'})}
- if(req.method==='GET'&&u.pathname==='/api/admin/check')return send(res,200,{admin:isAdmin(req)});
- if(!u.pathname.startsWith('/api/admin/'))return send(res,404,{error:'Not found'});
- if(!isAdmin(req))return send(res,401,{error:'Unauthorized'});
- if(req.method==='GET'&&u.pathname==='/api/admin/products')return send(res,200,await sb('/rest/v1/products?select=*&order=created_at.desc'));
- if(req.method==='POST'&&u.pathname==='/api/admin/products'){let d=JSON.parse(await read(req)||'{}'),x={name:String(d.name||'').trim(),price:Number(d.price||0),image:String(d.image||'').trim(),description:String(d.description||'').trim()};if(!x.name||!x.image)return send(res,400,{error:'نام و عکس محصول الزامی است'});let r=await sb('/rest/v1/products',{method:'POST',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(x)});return send(res,201,{product:r[0]})}
- let pm=u.pathname.match(/^\/api\/admin\/products\/(\d+)$/);if(pm&&req.method==='PUT'){let d=JSON.parse(await read(req)||'{}'),x={};if(d.name!==undefined)x.name=String(d.name).trim();if(d.price!==undefined)x.price=Number(d.price||0);if(d.image!==undefined)x.image=String(d.image).trim();if(d.description!==undefined)x.description=String(d.description).trim();let r=await sb(`/rest/v1/products?id=eq.${pm[1]}`,{method:'PATCH',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(x)});return send(res,200,{product:r[0]||null})}if(pm&&req.method==='DELETE'){await sb(`/rest/v1/products?id=eq.${pm[1]}`,{method:'DELETE'});return send(res,200,{ok:true})}
- if(req.method==='GET'&&u.pathname==='/api/admin/videos')return send(res,200,await sb('/rest/v1/videos?select=*&order=created_at.desc'));
- if(req.method==='POST'&&u.pathname==='/api/admin/videos'){let d=JSON.parse(await read(req)||'{}'),x={title:String(d.title||'').trim(),url:String(d.url||'').trim(),description:String(d.description||'').trim()};if(!x.title||!x.url)return send(res,400,{error:'عنوان و لینک ویدیو الزامی است'});let r=await sb('/rest/v1/videos',{method:'POST',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(x)});return send(res,201,{video:r[0]})}
- let vm=u.pathname.match(/^\/api\/admin\/videos\/(\d+)$/);if(vm&&req.method==='DELETE'){await sb(`/rest/v1/videos?id=eq.${vm[1]}`,{method:'DELETE'});return send(res,200,{ok:true})}
- if(req.method==='GET'&&u.pathname==='/api/admin/orders')return send(res,200,await sb('/rest/v1/orders?select=*&order=created_at.desc'));
- let om=u.pathname.match(/^\/api\/admin\/orders\/(\d+)$/);if(om&&req.method==='PATCH'){let d=JSON.parse(await read(req)||'{}'),status=d.status==='done'?'done':'new';let r=await sb(`/rest/v1/orders?id=eq.${om[1]}`,{method:'PATCH',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify({status})});return send(res,200,{order:r[0]||null})}
- return send(res,404,{error:'Not found'});
-}catch(e){console.error(e);return send(res,500,{error:e.message})}}
-function staticFile(req,res,u){let p=decodeURIComponent(u.pathname);if(p==='/')p='/index.html';if(p==='/admin')p='/admin.html';if(p==='/checkout')p='/checkout.html';let f=path.resolve(ROOT,'.'+p);if(!f.startsWith(path.resolve(ROOT)+path.sep))return send(res,403,{error:'forbidden'});fs.stat(f,(e,s)=>{if(e||!s.isFile())return send(res,404,{error:'Not found'});let m={'.html':'text/html; charset=utf-8','.js':'application/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp'}[path.extname(f).toLowerCase()]||'application/octet-stream';res.writeHead(200,{'Content-Type':m,'Cache-Control':'no-store'});fs.createReadStream(f).pipe(res)})}
-http.createServer((req,res)=>{let u=new URL(req.url,`http://${req.headers.host||'localhost'}`);if(u.pathname.startsWith('/api/'))return api(req,res,u);staticFile(req,res,u)}).listen(PORT,'0.0.0.0',()=>console.log(`Shop.Black.gun running on ${PORT}`));
+const http = require("http");
+const path = require("path");
+const fs = require("fs");
+const crypto = require("crypto");
+const Busboy = require("busboy");
+
+const PORT = process.env.PORT || 3000;
+const ROOT = __dirname;
+const SUPABASE_URL = process.env.SUPABASE_URL || "";
+const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || "";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "1236";
+const sessions = new Map();
+
+function sendJson(res, status, data, extra={}) {
+  const body = JSON.stringify(data);
+  res.writeHead(status, {"Content-Type":"application/json; charset=utf-8", ...extra});
+  res.end(body);
+}
+function body(req) {
+  return new Promise((resolve,reject)=>{
+    let s="";
+    req.on("data",c=>s+=c);
+    req.on("end",()=>resolve(s));
+    req.on("error",reject);
+  });
+}
+async function supabase(endpoint, opts={}) {
+  if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) throw new Error("Supabase env vars are missing");
+  const r = await fetch(SUPABASE_URL + endpoint, {
+    ...opts,
+    headers:{
+      apikey:SUPABASE_SECRET_KEY,
+      Authorization:"Bearer "+SUPABASE_SECRET_KEY,
+      "Content-Type":"application/json",
+      ...(opts.headers||{})
+    }
+  });
+  const t=await r.text();
+  let d; try{d=t?JSON.parse(t):null}catch{d=t}
+  if(!r.ok) throw new Error(typeof d==="string"?d:JSON.stringify(d));
+  return d;
+}
+function isAdmin(req){
+  const m=(req.headers.cookie||"").match(/(?:^|;\s*)admin_session=([^;]+)/);
+  if(!m) return false;
+  const exp=sessions.get(m[1]);
+  if(!exp || exp<Date.now()){sessions.delete(m[1]);return false}
+  return true;
+}
+function staticFile(req,res){
+  let p=decodeURIComponent(new URL(req.url,"http://localhost").pathname);
+  if(p==="/") p="/index.html";
+  const file=path.join(ROOT,p.replace(/^\/+/,""));
+  if(!file.startsWith(ROOT)) return sendJson(res,403,{error:"forbidden"});
+  fs.readFile(file,(e,data)=>{
+    if(e) return sendJson(res,404,{error:"not found"});
+    const ext=path.extname(file).toLowerCase();
+    const types={".html":"text/html; charset=utf-8",".js":"text/javascript; charset=utf-8",".css":"text/css; charset=utf-8",".json":"application/json; charset=utf-8",".png":"image/png",".jpg":"image/jpeg",".jpeg":"image/jpeg",".webp":"image/webp",".svg":"image/svg+xml"};
+    res.writeHead(200,{"Content-Type":types[ext]||"application/octet-stream"});
+    res.end(data);
+  });
+}
+async function uploadImage(req,res){
+  if(!isAdmin(req)) return sendJson(res,401,{error:"unauthorized"});
+  const bb=Busboy({headers:req.headers});
+  let buf=null, name="image";
+  bb.on("file",(field,file,info)=>{
+    name=(info.filename||"image").replace(/[^a-zA-Z0-9._-]/g,"_");
+    const chunks=[];
+    file.on("data",d=>chunks.push(d));
+    file.on("end",()=>buf=Buffer.concat(chunks));
+  });
+  bb.on("finish",async()=>{
+    try{
+      if(!buf) return sendJson(res,400,{error:"no file"});
+      const objectName=Date.now()+"-"+crypto.randomBytes(5).toString("hex")+"-"+name;
+      const r=await fetch(`${SUPABASE_URL}/storage/v1/object/product-images/${encodeURIComponent(objectName)}`,{
+        method:"POST",
+        headers:{apikey:SUPABASE_SECRET_KEY,Authorization:"Bearer "+SUPABASE_SECRET_KEY,"Content-Type":"application/octet-stream"},
+        body:buf
+      });
+      if(!r.ok) throw new Error(await r.text());
+      sendJson(res,200,{url:`${SUPABASE_URL}/storage/v1/object/public/product-images/${encodeURIComponent(objectName)}`});
+    }catch(e){sendJson(res,500,{error:e.message})}
+  });
+  req.pipe(bb);
+}
+
+const server=http.createServer(async(req,res)=>{
+  try{
+    const u=new URL(req.url,"http://localhost"), p=u.pathname;
+
+    if(req.method==="GET"&&p==="/api/products") return sendJson(res,200,await supabase("/rest/v1/products?select=*&order=id.desc"));
+    if(req.method==="GET"&&p==="/api/videos") return sendJson(res,200,await supabase("/rest/v1/videos?select=*&order=id.desc"));
+    if(req.method==="POST"&&p==="/api/orders"){
+      const data=JSON.parse(await body(req)||"{}");
+      return sendJson(res,201,await supabase("/rest/v1/orders",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify(data)}));
+    }
+
+    if(req.method==="POST"&&p==="/api/admin/login"){
+      const data=JSON.parse(await body(req)||"{}");
+      if(data.password!==ADMIN_PASSWORD) return sendJson(res,401,{error:"رمز عبور اشتباه است"});
+      const token=crypto.randomBytes(24).toString("hex");
+      sessions.set(token,Date.now()+86400000);
+      return sendJson(res,200,{ok:true},{Set-Cookie:`admin_session=${token}; HttpOnly; Path=/; SameSite=Lax`});
+    }
+    if(req.method==="POST"&&p==="/api/admin/logout"){
+      const m=(req.headers.cookie||"").match(/(?:^|;\s*)admin_session=([^;]+)/);
+      if(m)sessions.delete(m[1]);
+      return sendJson(res,200,{ok:true},{Set-Cookie:"admin_session=; Max-Age=0; Path=/"});
+    }
+    if(p.startsWith("/api/admin/")&&!isAdmin(req)) return sendJson(res,401,{error:"unauthorized"});
+    if(req.method==="GET"&&p==="/api/admin/check") return sendJson(res,200,{ok:true});
+
+    if(req.method==="GET"&&p==="/api/admin/products") return sendJson(res,200,await supabase("/rest/v1/products?select=*&order=id.desc"));
+    if(req.method==="POST"&&p==="/api/admin/products"){
+      const data=JSON.parse(await body(req)||"{}");
+      return sendJson(res,201,await supabase("/rest/v1/products",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify(data)}));
+    }
+    if((req.method==="PUT"||req.method==="PATCH")&&p.startsWith("/api/admin/products/")){
+      const id=p.split("/").pop(), data=JSON.parse(await body(req)||"{}");
+      return sendJson(res,200,await supabase(`/rest/v1/products?id=eq.${encodeURIComponent(id)}`,{method:"PATCH",headers:{"Prefer":"return=representation"},body:JSON.stringify(data)}));
+    }
+    if(req.method==="DELETE"&&p.startsWith("/api/admin/products/")){
+      const id=p.split("/").pop();
+      await supabase(`/rest/v1/products?id=eq.${encodeURIComponent(id)}`,{method:"DELETE"});
+      return sendJson(res,200,{ok:true});
+    }
+
+    if(req.method==="GET"&&p==="/api/admin/videos") return sendJson(res,200,await supabase("/rest/v1/videos?select=*&order=id.desc"));
+    if(req.method==="POST"&&p==="/api/admin/videos"){
+      const data=JSON.parse(await body(req)||"{}");
+      return sendJson(res,201,await supabase("/rest/v1/videos",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify(data)}));
+    }
+    if(req.method==="DELETE"&&p.startsWith("/api/admin/videos/")){
+      const id=p.split("/").pop();
+      await supabase(`/rest/v1/videos?id=eq.${encodeURIComponent(id)}`,{method:"DELETE"});
+      return sendJson(res,200,{ok:true});
+    }
+
+    if(req.method==="GET"&&p==="/api/admin/orders") return sendJson(res,200,await supabase("/rest/v1/orders?select=*&order=id.desc"));
+    if(req.method==="PATCH"&&p.startsWith("/api/admin/orders/")){
+      const id=p.split("/").pop(), data=JSON.parse(await body(req)||"{}");
+      return sendJson(res,200,await supabase(`/rest/v1/orders?id=eq.${encodeURIComponent(id)}`,{method:"PATCH",headers:{"Prefer":"return=representation"},body:JSON.stringify(data)}));
+    }
+
+    if(req.method==="POST"&&p==="/api/admin/upload-image") return uploadImage(req,res);
+    staticFile(req,res);
+  }catch(e){console.error(e);sendJson(res,500,{error:e.message})}
+});
+server.listen(PORT,()=>console.log(`Shop Black running on port ${PORT}`));
